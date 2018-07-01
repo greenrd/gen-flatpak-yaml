@@ -1,0 +1,33 @@
+#! /bin/bash -peux
+function gen-yaml () {
+    while read dep; do
+	if ! $inside_builddir perl -M$dep -e 1 >&2 && ! fgrep $dep "$seen_file" >/dev/null; then
+	    echo $dep >>$seen_file
+	    local url=$(perl -MMetaCPAN::Client -e 'print MetaCPAN::Client->new( version => v1 )->download_url( "'$dep'" )->download_url')
+	    if [ "$url" ]; then
+		mkdir extracted
+		pushd extracted >/dev/null
+		local sha512=$(curl $url | tee >(tar xfz - "*/META.json") | sha512sum | cut -d " " -f 1)
+		cat <<-EOF
+		  - name: $dep
+		    sources:
+		      - type: script
+		        dest-filename: configure
+		        commands: [perl Makefile.PL]
+		      - type: archive
+		        url: $url
+		        sha512: $sha512
+		    modules:
+		EOF
+		jq -r '.prereqs|(select(.build != null) | .build), .configure, .runtime|.requires|keys[]' */META.json|sort -u|grep -v '^perl$'|gen-yaml|sed 's/^/    /'
+		popd >/dev/null
+		rm -rf extracted
+	    fi
+	fi
+    done
+}
+
+inside_builddir="flatpak-builder --run $PWD/$1 $PWD/$2"
+seen_file="$PWD/seen"
+echo strict > "$seen_file"
+gen-yaml
